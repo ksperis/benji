@@ -65,6 +65,7 @@ def setup_logging() -> None:
                                                         structlog.processors.JSONRenderer(),
                                                     ])
 
+    # StreamHandler() will log to sys.stderr by default.
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)
     root_logger = logging.getLogger()
@@ -91,7 +92,8 @@ def _one_line_stderr(stderr: str):
 def subprocess_run(args: List[str],
                    input: str = None,
                    timeout: int = None,
-                   decode_json: bool = False) -> Union[Dict, List, str]:
+                   decode_json: bool = False,
+                   stderr_jsonl_passthru: bool = True) -> Union[Dict, List, str]:
     logger.debug('Running process: {}'.format(' '.join(args)))
     try:
 
@@ -109,8 +111,16 @@ def subprocess_run(args: List[str],
         raise RuntimeError(f'{args[0]} invocation failed with a {type(exception).__name__} exception: {str(exception)}') from None
 
     if result.stderr != '':
-        for line in result.stderr.splitlines():
-            logger.info(line)
+        for line in result.stderr.splitlines(keepends=False):
+            if stderr_jsonl_passthru:
+                try:
+                    json.loads(line)
+                except JSONDecodeError:
+                    logger.info(line)
+                else:
+                    print(line, file=sys.stderr)
+            else:
+                logger.info(line)
 
     if result.returncode == 0:
         logger.debug('Process finished successfully.')
@@ -121,7 +131,8 @@ def subprocess_run(args: List[str],
                 raise RuntimeError(f'{args[0]} invocation was successful but did not return valid JSON. Output on stderr was: {_one_line_stderr(result.stderr)}.')
 
             if stdout_json is None or not isinstance(stdout_json, (dict, list)):
-                raise RuntimeError(f'{args[0]} invocation was successful but did return null or empty JSON dictonary. Output on stderr was: {_one_line_stderr(result.stderr)}.')
+                raise RuntimeError(f'{args[0]} invocation was successful but did return null or neither a JSON list nor'
+                                   f'a dictionary. Output on stderr was: {_one_line_stderr(result.stderr)}.')
 
             return stdout_json
         else:
